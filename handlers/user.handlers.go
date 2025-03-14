@@ -22,22 +22,7 @@ func NewUserHandler(db *sql.DB, reds *redis.Client) *UserHandler {
 }
 
 func (h *UserHandler) GETusers(w http.ResponseWriter, r *http.Request) {
-	cntxt := context.Background()
-	/// first   check in the redis  otherwise  search in databasejk
-	users, err := h.redisClient.HGetAll(cntxt, "users").Result()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if len(users) == 0 { // cache miss
-		result, err := h.DB.Query("SELECT * from users")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-	}
-
+	/// first   check in the redis  otherwise  search in database
 	result, err := h.DB.Query("select * from users")
 	if err != nil {
 		fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
@@ -94,7 +79,7 @@ func (h *UserHandler) GETUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(val) == 0 {
 		result := h.DB.QueryRow(
-			"SELECT userId, firstName, lastName, email FROM users WHERE userId=?",
+			"SELECT userId firstName, lastName, email FROM users WHERE userId=?",
 			userId,
 		)
 		err := result.Scan(&user.UserId, &user.Email, &user.FirstName, &user.LastName)
