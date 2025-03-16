@@ -22,21 +22,43 @@ func NewUserHandler(db *sql.DB, reds *redis.Client) *UserHandler {
 }
 
 func (h *UserHandler) GETusers(w http.ResponseWriter, r *http.Request) {
-	/// first   check in the redis  otherwise  search in database
-	result, err := h.DB.Query("select * from users")
+	cntxt := context.Background()
+
+	val, err := h.redisClient.HGetAll(cntxt, "users*").Result()
 	if err != nil {
-		fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
-		return
+		fmt.Fprint(w, "users doesn't found in cache", http.StatusInternalServerError)
 	}
-	defer result.Close()
-	var users []dtos.User
-	for result.Next() {
-		var user dtos.User
-		result.Scan(&user.UserId, &user.FirstName, &user.LastName, &user.Email, &user.Password)
-		users = append(users, user)
+	var users []dtos.UserResponse
+
+	if len(val) > 0 {
+		for _, key := range val {
+			val, _ := h.redisClient.HGetAll(cntxt, key).Result()
+			user := dtos.UserResponse{
+				FirstName: val["firstName"],
+				LastName:  val["LastName"],
+				Email:     val["email"],
+			}
+			users = append(users, user)
+		}
+		response, _ := json.MarshalIndent(users, "", "    ")
+		w.Write(response)
+
+	} else {
+		result, err := h.DB.Query("select * from users")
+		if err != nil {
+			fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
+			return
+		}
+		defer result.Close()
+		var users []dtos.User
+		for result.Next() {
+			var user dtos.User
+			result.Scan(&user.UserId, &user.FirstName, &user.LastName, &user.Email, &user.Password)
+			users = append(users, user)
+		}
+		response, err := json.MarshalIndent(users, "", "    ")
+		w.Write(response)
 	}
-	response, err := json.MarshalIndent(users, "", "    ")
-	w.Write(response)
 }
 func (h *UserHandler) POSTUser(w http.ResponseWriter, r *http.Request) {
 
