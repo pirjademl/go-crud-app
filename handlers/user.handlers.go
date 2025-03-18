@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-rest-api/dtos"
 	"github.com/gorilla/mux"
@@ -22,43 +24,46 @@ func NewUserHandler(db *sql.DB, reds *redis.Client) *UserHandler {
 }
 
 func (h *UserHandler) GETusers(w http.ResponseWriter, r *http.Request) {
-	cntxt := context.Background()
 
-	val, err := h.redisClient.HGetAll(cntxt, "users*").Result()
-	if err != nil {
-		fmt.Fprint(w, "users doesn't found in cache", http.StatusInternalServerError)
-	}
 	var users []dtos.UserResponse
+	cntxt := context.Background()
+	val, err := h.redisClient.Get(cntxt, "users").Result()
+	if err != redis.Nil {
 
-	if len(val) > 0 {
-		for _, key := range val {
-			val, _ := h.redisClient.HGetAll(cntxt, key).Result()
-			user := dtos.UserResponse{
-				FirstName: val["firstName"],
-				LastName:  val["LastName"],
-				Email:     val["email"],
-			}
-			users = append(users, user)
-		}
-		response, _ := json.MarshalIndent(users, "", "    ")
-		w.Write(response)
-
-	} else {
-		result, err := h.DB.Query("select * from users")
+		err = json.Unmarshal([]byte(val), &users)
 		if err != nil {
-			fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
-			return
-		}
-		defer result.Close()
-		var users []dtos.User
-		for result.Next() {
-			var user dtos.User
-			result.Scan(&user.UserId, &user.FirstName, &user.LastName, &user.Email, &user.Password)
-			users = append(users, user)
+			fmt.Fprint(w, "error while unmarshalling  the data ", http.StatusInternalServerError)
 		}
 		response, err := json.MarshalIndent(users, "", "    ")
+		if err != nil {
+			fmt.Fprint(w, "error while marshalling data", http.StatusInternalServerError)
+		}
+
 		w.Write(response)
+		return
 	}
+
+	log.Println("cache miss")
+	result, err := h.DB.Query("select * from users")
+	if err != nil {
+		fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
+		return
+	}
+	defer result.Close()
+	for result.Next() {
+		var user dtos.UserResponse
+		result.Scan(&user.UserId, &user.FirstName, &user.LastName, &user.Email)
+		users = append(users, user)
+	}
+
+	serialized, err := json.Marshal(users)
+	err = h.redisClient.Set(cntxt, "users", serialized, 10*time.Minute).Err()
+	if err != nil {
+		fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
+		return
+	}
+	response, err := json.MarshalIndent(users, "", "    ")
+	w.Write(response)
 }
 func (h *UserHandler) POSTUser(w http.ResponseWriter, r *http.Request) {
 
