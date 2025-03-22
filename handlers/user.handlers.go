@@ -25,47 +25,44 @@ func NewUserHandler(db *sql.DB, reds *redis.Client) *UserHandler {
 
 func (h *UserHandler) GETusers(w http.ResponseWriter, r *http.Request) {
 
+	w.Header().Set("Content-Type", "application/json")
 	var users []dtos.UserResponse
 	cntxt := context.Background()
 	val, err := h.redisClient.Get(cntxt, "users").Result()
-	if err != redis.Nil {
-
-		err = json.Unmarshal([]byte(val), &users)
+	if err != nil {
+		log.Println(err.Error())
+		fmt.Println("error retrieving users from redis")
+	}
+	if err == redis.Nil {
+		log.Println("insider err==redis.Nil")
+		rows, err := h.DB.Query(" SELECT userId,firstName,lastName,email from users")
 		if err != nil {
-			fmt.Fprint(w, "error while unmarshalling  the data ", http.StatusInternalServerError)
+			log.Println(err.Error())
+			fmt.Println("errors selecting users from database ")
+			return
 		}
-		response, err := json.MarshalIndent(users, "", "    ")
-		if err != nil {
-			fmt.Fprint(w, "error while marshalling data", http.StatusInternalServerError)
-		}
+		for rows.Next() {
+			var user dtos.UserResponse
+			rows.Scan(&user.UserId, &user.FirstName, &user.LastName, &user.Email)
+			users = append(users, user)
 
+		}
+		response, err := json.MarshalIndent(users, "", " ")
+		_, err = h.redisClient.Set(cntxt, "users", response, 10*time.Minute).Result()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Write(response)
 		return
-	}
 
-	log.Println("cache miss")
-	result, err := h.DB.Query("select * from users")
-	if err != nil {
-		fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
-		return
 	}
-	defer result.Close()
-	for result.Next() {
-		var user dtos.UserResponse
-		result.Scan(&user.UserId, &user.FirstName, &user.LastName, &user.Email)
-		users = append(users, user)
-	}
-
-	serialized, err := json.Marshal(users)
-	err = h.redisClient.Set(cntxt, "users", serialized, 10*time.Minute).Err()
-	if err != nil {
-		fmt.Fprint(w, "failed to fetch users", http.StatusInternalServerError)
-		return
-	}
-	response, err := json.MarshalIndent(users, "", "    ")
+	response := []byte(val)
 	w.Write(response)
 }
 func (h *UserHandler) POSTUser(w http.ResponseWriter, r *http.Request) {
+
+	w.Header().Set("Content-Type", "application/json")
 
 	var user dtos.User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
@@ -85,7 +82,21 @@ func (h *UserHandler) POSTUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	cntxt := context.Background()
+	err = h.redisClient.Del(cntxt, "users").Err()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_, err = h.redisClient.HSet(cntxt, user.UserId, map[string]interface{}{"userId": user.UserId, "email": user.Email, "firstName": user.FirstName, "lastName": user.LastName}).
+		Result()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	response, err := json.Marshal(&user)
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -94,6 +105,8 @@ func (h *UserHandler) POSTUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) GETUser(w http.ResponseWriter, r *http.Request) {
+
+	w.Header().Set("Content-Type", "application/json")
 	vars := mux.Vars(r)
 	userId := vars["userId"]
 	cntxt := context.Background()
@@ -111,7 +124,8 @@ func (h *UserHandler) GETUser(w http.ResponseWriter, r *http.Request) {
 		)
 		err := result.Scan(&user.UserId, &user.Email, &user.FirstName, &user.LastName)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			w.WriteHeader(http.StatusNotFound)
+			http.Error(w, "user Not found", http.StatusNotFound)
 			return
 		}
 		//cache the result in redis
@@ -121,7 +135,6 @@ func (h *UserHandler) GETUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
 	} else {
 		user = dtos.UserResponse{
 			UserId:    val["userId"],
@@ -140,6 +153,8 @@ func (h *UserHandler) GETUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) DELETEUser(w http.ResponseWriter, r *http.Request) {
+
+	w.Header().Set("Content-Type", "application/json")
 	vars := mux.Vars(r)
 	userId := vars["userId"]
 
@@ -154,6 +169,13 @@ func (h *UserHandler) DELETEUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	cntxt := context.Background()
+	err = h.redisClient.Del(cntxt, "users").Err()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(201)
 	response, err := json.Marshal(rows)
 	w.Write(response)
