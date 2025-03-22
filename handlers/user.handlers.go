@@ -124,7 +124,6 @@ func (h *UserHandler) GETUser(w http.ResponseWriter, r *http.Request) {
 		)
 		err := result.Scan(&user.UserId, &user.Email, &user.FirstName, &user.LastName)
 		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
 			http.Error(w, "user Not found", http.StatusNotFound)
 			return
 		}
